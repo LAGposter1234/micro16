@@ -121,13 +121,29 @@ void updateText(Cpu &cpu) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) return 1;
     init_terminal();
     InitWindow(768, 384, "Emulator");
     SetTraceLogLevel(LOG_NONE);
     SetTargetFPS(240);
     Cpu cpu;
-    cpu.loadBinary(std::string(argv[1]));
+    const char *bios = nullptr;
+    const char *disk = nullptr;
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+
+        if (arg.rfind("-bios=", 0) == 0) bios = argv[i] + 6;
+        else if (arg.rfind("-disk=", 0) == 0) disk = argv[i] + 6;
+    }
+    if (bios) {
+        cpu.loadBinary(std::string(bios));
+        std::cout << "BIOS: [" << bios << "]\n";
+    }
+    if (disk) cpu.disk->mount(disk);
+    if (!bios) {
+        std::cerr << "No firmware supplied, exiting\n";
+        return 1;
+    }
     Image framebufferImage = GenImageColor(512, 384, BLACK);
     framebufferTexture = LoadTextureFromImage(framebufferImage);
     UnloadImage(framebufferImage);
@@ -158,5 +174,6 @@ int main(int argc, char** argv) {
     }
     CloseWindow();
     reset_terminal();
+    std::cout << std::endl;
     return 0;
 }

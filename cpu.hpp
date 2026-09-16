@@ -95,6 +95,19 @@ typedef enum {
     INT = 66,
     IRET = 67,
 
+// ISA EXTENSTION: EZMEM
+
+    STRA = 68, // STRA 0x1000
+    STRB = 69,
+    LODA = 70,
+    LODB = 71,
+
+    STRIMMIMM = 72, // STRIMMIMM 0x1000 0x12
+    STRAIMM = 73, // SETA 0x1234 STRAIMM 0x1000
+    STRIMMA = 74, // SETA 0X1000 STRIMMA 0x1234
+
+    STRAB = 75, // SETA 0x1000 SETB 0x1234 STRAB
+
     HLT = 255
 } opcode_t;
 
@@ -180,12 +193,131 @@ public:
     }
 };
 
+class DiskPort : public Port {
+public:
+    static constexpr uint8_t COMMAND = 0;
+    static constexpr uint8_t SECTOR_LO = 1;
+    static constexpr uint8_t SECTOR_HI = 2;
+    static constexpr uint8_t DATA = 3;
+    static constexpr uint8_t STATUS = 4;
+
+    static constexpr uint8_t CMD_READ = 1;
+    static constexpr uint8_t CMD_WRITE = 2;
+
+    static constexpr uint8_t STATUS_UNMOUNTED = 0;
+    static constexpr uint8_t STATUS_READY = 1;
+    static constexpr uint8_t STATUS_ERROR = 2;
+
+    uint16_t &a;
+    uint16_t &b;
+    uint8_t &c;
+
+    std::fstream disk;
+    uint32_t sector = 0;
+    uint16_t data_index = 0;
+    uint8_t status = STATUS_UNMOUNTED;
+    uint8_t buffer[512] = {};
+
+    DiskPort(uint16_t &a, uint16_t &b, uint8_t &c)
+    : a(a), b(b), c(c) {}
+
+    void mount(const char *path) {
+        if (disk.is_open())
+            disk.close();
+
+        disk.open(path, std::ios::in | std::ios::out | std::ios::binary);
+
+        status = disk.is_open() ? STATUS_READY : STATUS_ERROR;
+        sector = 0;
+        data_index = 0;
+    }
+
+    void acceptInput(uint16_t value) override {
+        if (status == STATUS_UNMOUNTED || status == STATUS_ERROR)
+            return;
+
+        switch (c) {
+            case COMMAND:
+                if (value == CMD_READ) {
+                    disk.seekg((uint64_t)sector * 512);
+                    disk.read((char *)buffer, 512);
+
+                    if (disk.gcount() != 512) {
+                        status = STATUS_ERROR;
+                        return;
+                    }
+
+                    data_index = 0;
+                } else if (value == CMD_WRITE) {
+                    data_index = 0;
+                }
+                break;
+
+            case SECTOR_LO:
+                sector = (sector & 0xFFFF0000) | value;
+                break;
+
+            case SECTOR_HI:
+                sector = (sector & 0x0000FFFF) | ((uint32_t)value << 16);
+                break;
+
+            case DATA:
+                if (data_index >= 512)
+                    return;
+
+            buffer[data_index++] = value & 0xFF;
+
+            if (data_index < 512)
+                buffer[data_index++] = value >> 8;
+
+            if (data_index >= 512) {
+                disk.seekp((uint64_t)sector * 512);
+                disk.write((char *)buffer, 512);
+                disk.flush();
+
+                if (!disk.good())
+                    status = STATUS_ERROR;
+            }
+            break;
+        }
+    }
+
+    uint16_t provideOutput() override {
+        if (status == STATUS_UNMOUNTED || status == STATUS_ERROR)
+            return 0;
+
+        switch (c) {
+            case SECTOR_LO:
+                return sector & 0xFFFF;
+
+            case SECTOR_HI:
+                return sector >> 16;
+
+            case DATA:
+                if (data_index >= 512)
+                    return 0;
+
+            {
+                uint16_t value = buffer[data_index++];
+
+                if (data_index < 512)
+                    value |= (uint16_t)buffer[data_index++] << 8;
+
+                return value;
+            }
+
+            case STATUS:
+                return status;
+        }
+
+        return 0;
+    }
+};
+
 // to get the interrupt vector to call, its fault + 0xF0
 typedef enum {
     FAULT_GENERAL_PROTECTION = 0, // this would be 0xF0
-    FAULT_INVALID_CS = 1,
-    FAULT_INVALID_FJMP = 2,
-    FAULT_INVALID_INTERRUPT_VECTOR = 3,
+    FAULT_INVALID_INTERRUPT_VECTOR = 1,
     FAULT_DOUBLE_FAULT = 0xF
 } Fault;
 
@@ -210,6 +342,10 @@ public:
         vga = new VgaPort(a, b);
         vga->port = 0x20;
         ports[0x20] = vga;
+
+        disk = new DiskPort(a, b, c);
+        disk->port = 0x30;
+        ports[0x30] = disk;
 
         waking.port = 0xFF;
         ports[0xFF] = &waking;
@@ -245,6 +381,7 @@ public:
     std::vector<Port*> ports = std::vector<Port*>(256);
     SerialPort serial;
     VgaPort* vga;
+    DiskPort* disk;
     uint16_t a; // registers
     uint16_t b;
     uint32_t xa;
@@ -303,7 +440,7 @@ public:
         uint16_t newip = (uint16_t)ram[address] | ((uint16_t)ram[address + 1] << 8);
         uint16_t newcs = (uint16_t)ram[address + 2] | ((uint16_t)ram[address + 3] << 8);
         uint32_t physical = ((uint32_t)newcs << 16) + newip;
-        std::cout << "Software interrupt going to 0x" << std::hex << physical << std::endl;
+        //std::cout << "Software interrupt going to 0x" << std::hex << physical << std::endl;
         if (physical >= ram.size() || physical < (0x0010 << 16) + 0x0000) { // valid interrupt range = 0xFFFF:FFFF - 0x0010:0000
             if (num == FAULT_INVALID_INTERRUPT_VECTOR + 0xF0) raise_fault(FAULT_DOUBLE_FAULT);
             else raise_fault(FAULT_INVALID_INTERRUPT_VECTOR);
@@ -845,6 +982,90 @@ public:
             case IRET:
                     interrupt_return();
             break;
+
+            case STRA: {
+                uint32_t address = ((uint32_t)ds << 16) | ram[ip + 1] | ((uint32_t)ram[ip + 2] << 8);
+
+                ram[address] = a & 0xFF;
+                ram[address + 1] = (a >> 8) & 0xFF;
+
+                ip += 3;
+                break;
+            }
+
+            case STRB: {
+                uint32_t address = ((uint32_t)ds << 16) | ram[ip + 1] | ((uint32_t)ram[ip + 2] << 8);
+
+                ram[address] = b & 0xFF;
+                ram[address + 1] = (b >> 8) & 0xFF;
+
+                ip += 3;
+                break;
+            }
+
+            case LODA: {
+                uint32_t address = ((uint32_t)ds << 16) | ram[ip + 1] | ((uint32_t)ram[ip + 2] << 8);
+
+                a = (uint16_t)ram[address]
+                | ((uint16_t)ram[address + 1] << 8);
+
+                ip += 3;
+                break;
+            }
+
+            case LODB: {
+                uint32_t address = ((uint32_t)ds << 16) | ram[ip + 1] | ((uint32_t)ram[ip + 2] << 8);
+
+                b = (uint16_t)ram[address]
+                | ((uint16_t)ram[address + 1] << 8);
+
+                ip += 3;
+                break;
+            }
+
+            case STRIMMIMM: {
+                uint32_t address = ((uint32_t)ds << 16) | ram[ip + 1] | ((uint32_t)ram[ip + 2] << 8);
+                uint16_t value = (uint16_t)ram[ip + 3]
+                | ((uint16_t)ram[ip + 4] << 8);
+
+                ram[address] = value & 0xFF;
+                ram[address + 1] = (value >> 8) & 0xFF;
+
+                ip += 5;
+                break;
+            }
+
+            case STRAIMM: {
+                uint32_t address = ((uint32_t)ds << 16) | ram[ip + 1] | ((uint32_t)ram[ip + 2] << 8);
+
+                ram[address] = a & 0xFF;
+                ram[address + 1] = (a >> 8) & 0xFF;
+
+                ip += 3;
+                break;
+            }
+
+            case STRIMMA: {
+                uint32_t address = ((uint32_t)ds << 16) | a;
+                uint16_t value = (uint16_t)ram[ip + 1]
+                | ((uint16_t)ram[ip + 2] << 8);
+
+                ram[address] = value & 0xFF;
+                ram[address + 1] = (value >> 8) & 0xFF;
+
+                ip += 3;
+                break;
+            }
+
+            case STRAB: {
+                uint32_t address = ((uint32_t)ds << 16) | a;
+
+                ram[address] = b & 0xFF;
+                ram[address + 1] = (b >> 8) & 0xFF;
+
+                ip++;
+                break;
+            }
 
             case HLT:
                 halted = true;

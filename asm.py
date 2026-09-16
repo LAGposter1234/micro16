@@ -87,6 +87,16 @@ OPCODES = {
     "INT": 66,
     "IRET": 67,
 
+    # EZMEM
+    "STRA": 68,
+    "STRB": 69,
+    "LODA": 70,
+    "LODB": 71,
+    "STRIMMIMM": 72,
+    "STRAIMM": 73,
+    "STRIMMA": 74,
+    "STRAB": 75,
+
     "HLT": 255,
 }
 
@@ -120,6 +130,14 @@ TWO_BYTE_OPERAND = {
 
     "LDC",
     "SRC",
+
+    # EZMEM
+    "STRA",
+    "STRB",
+    "LODA",
+    "LODB",
+    "STRAIMM",
+    "STRIMMA",
 }
 
 
@@ -180,6 +198,9 @@ NO_OPERAND = {
 
     "IRET",
 
+    # EZMEM
+    "STRAB",
+
     "HLT",
 }
 
@@ -191,27 +212,25 @@ JUMPS = {
     "JCZ",
 }
 
+
 PREPROCESSED = {
     "DB",
     "DW",
 }
 
 
-def parse_value(s, labels):
+def parse_value(s, labels=None):
     s = s.strip()
 
-    # Label
-    if s in labels:
+    if labels is not None and s in labels:
         return labels[s]
 
-    # Character literal
     if len(s) >= 3 and s[0] == "'" and s[-1] == "'":
         if len(s) != 3:
             raise ValueError(f"invalid character literal: {s}")
 
         return ord(s[1])
 
-    # Number
     try:
         return int(s, 0)
     except ValueError:
@@ -220,6 +239,9 @@ def parse_value(s, labels):
 
 def instruction_size(mnemonic):
     if mnemonic == "OUT":
+        return 5
+
+    if mnemonic == "STRIMMIMM":
         return 5
 
     if mnemonic in NO_OPERAND:
@@ -239,19 +261,37 @@ def instruction_size(mnemonic):
 
     raise ValueError(f"assembler doesn't know how to encode {mnemonic}")
 
-def do_byteinsertion(mnemonic, args):
+
+def do_byteinsertion(mnemonic, args, labels):
     if mnemonic == "DB":
-        return [parse_value(arg) & 0xFF for arg in args]
+        out = []
+
+        for arg in args:
+            value = parse_value(arg, labels)
+
+            if not 0 <= value <= 0xff:
+                raise ValueError(f"byte out of range: {value}")
+
+            out.append(value)
+
+        return out
 
     if mnemonic == "DW":
         out = []
+
         for arg in args:
-            value = parse_value(arg) & 0xFFFF
-            out.append(value & 0xFF)
-            out.append((value >> 8) & 0xFF)
+            value = parse_value(arg, labels)
+
+            if not 0 <= value <= 0xffff:
+                raise ValueError(f"word out of range: {value}")
+
+            out.append(value & 0xff)
+            out.append((value >> 8) & 0xff)
+
         return out
 
     return []
+
 
 def assemble_instruction(line, labels):
     parts = line.replace(",", " ").split()
@@ -263,21 +303,19 @@ def assemble_instruction(line, labels):
     args = parts[1:]
 
     if mnemonic in PREPROCESSED:
-        return do_byteinsertion(mnemonic, args)
+        return do_byteinsertion(mnemonic, args, labels)
 
     if mnemonic not in OPCODES:
         raise ValueError(f"unknown instruction: {mnemonic}")
 
     opcode = OPCODES[mnemonic]
 
-    # No operand
     if mnemonic in NO_OPERAND:
         if args:
             raise ValueError(f"{mnemonic} takes no operands")
 
         return [opcode]
 
-    # One-byte operand
     if mnemonic in ONE_BYTE_OPERAND:
         if len(args) != 1:
             raise ValueError(f"{mnemonic} takes one operand")
@@ -292,7 +330,6 @@ def assemble_instruction(line, labels):
             value
         ]
 
-    # Two-byte operand
     if mnemonic in TWO_BYTE_OPERAND:
         if len(args) != 1:
             raise ValueError(f"{mnemonic} takes one operand")
@@ -308,7 +345,6 @@ def assemble_instruction(line, labels):
             (value >> 8) & 0xff
         ]
 
-    # Four-byte operand
     if mnemonic in FOUR_BYTE_OPERAND:
         if len(args) != 1:
             raise ValueError(f"{mnemonic} takes one operand")
@@ -324,6 +360,27 @@ def assemble_instruction(line, labels):
             (value >> 8) & 0xff,
             (value >> 16) & 0xff,
             (value >> 24) & 0xff
+        ]
+
+    if mnemonic == "STRIMMIMM":
+        if len(args) != 2:
+            raise ValueError("STRIMMIMM takes two operands")
+
+        address = parse_value(args[0], labels)
+        value = parse_value(args[1], labels)
+
+        if not 0 <= address <= 0xffff:
+            raise ValueError(f"address out of range: {address}")
+
+        if not 0 <= value <= 0xffff:
+            raise ValueError(f"value out of range: {value}")
+
+        return [
+            opcode,
+            address & 0xff,
+            (address >> 8) & 0xff,
+            value & 0xff,
+            (value >> 8) & 0xff
         ]
 
     if mnemonic == "OUT":
@@ -347,7 +404,6 @@ def assemble_instruction(line, labels):
             (value >> 8) & 0xff
         ]
 
-    # JMP/JAZ/JBZ address
     if mnemonic in JUMPS:
         if len(args) != 1:
             raise ValueError(f"{mnemonic} takes one operand")
@@ -371,10 +427,6 @@ def assemble_instruction(line, labels):
 def assemble(source):
     lines = source.splitlines()
 
-    # -------------------------
-    # PASS 1: Find all labels
-    # -------------------------
-
     labels = {}
     offset = 0
 
@@ -384,15 +436,6 @@ def assemble(source):
         if not line:
             continue
 
-        # Handle labels.
-        # Supports:
-        #
-        # start:
-        #
-        # and:
-        #
-        # start: SETA 10
-        #
         while ":" in line:
             label, line = line.split(":", 1)
 
@@ -420,6 +463,10 @@ def assemble(source):
         parts = line.replace(",", " ").split()
         mnemonic = parts[0].upper()
 
+        if mnemonic in PREPROCESSED:
+            offset += len(do_byteinsertion(mnemonic, parts[1:], labels))
+            continue
+
         if mnemonic not in OPCODES:
             raise ValueError(
                 f"line {line_number}: unknown instruction: {mnemonic}"
@@ -430,10 +477,6 @@ def assemble(source):
         except ValueError as e:
             raise ValueError(f"line {line_number}: {e}")
 
-    # -------------------------
-    # PASS 2: Generate binary
-    # -------------------------
-
     output = bytearray()
 
     for line_number, original_line in enumerate(lines, 1):
@@ -443,7 +486,6 @@ def assemble(source):
             if not line:
                 continue
 
-            # Remove labels
             while ":" in line:
                 _, line = line.split(":", 1)
                 line = line.strip()
