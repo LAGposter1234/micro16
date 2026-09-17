@@ -76,6 +76,8 @@ typedef enum {
     SWPXAAB = 52, // swap XA-> A, B
     SWPXBAB = 53,
 
+// ISA EXTENSION : C REGISTER
+
     INCC = 54,
     SETC = 55,
     DECC = 56,
@@ -86,6 +88,7 @@ typedef enum {
     SRC = 60, // SETC 0x12 SRC 0x1234
     SRAC = 61, // SETA 0x1234 SETC 0x12 SRAC
     SRBC = 62,
+
 
     OUTC = 63, // most likely used for serial
     INC = 64,
@@ -107,6 +110,13 @@ typedef enum {
     STRIMMA = 74, // SETA 0X1000 STRIMMA 0x1234
 
     STRAB = 75, // SETA 0x1000 SETB 0x1234 STRAB
+
+// ISA EXTENSION: FUNCY
+
+    CALL = 76,
+    RET = 77,
+
+// BASE ISA
 
     HLT = 255
 } opcode_t;
@@ -162,16 +172,26 @@ class VgaPort : public Port {
 public:
     uint16_t &x;
     uint16_t &y;
-    uint8_t mode = 0;
+    uint8_t mode = 1;
     uint8_t vram[512 * 384] = {};
     uint16_t text_vram[51 * 38] = {};
 
+    void init() {
+        for (auto cell : text_vram) {
+            cell = 0x0000;
+        }
+    }
+
     VgaPort(uint16_t &x, uint16_t &y)
-    : x(x), y(y) {}
+    : x(x), y(y) {init();}
 
     void acceptInput(uint16_t value) override {
         if (value == 0x80) {
             mode = x;
+            return;
+        }
+        if (value == 0x81) {
+            init();
             return;
         }
 
@@ -1064,6 +1084,17 @@ public:
                 ram[address + 1] = (b >> 8) & 0xFF;
 
                 ip++;
+                break;
+            }
+
+            case CALL: {
+                push32(ip + 5);
+                ip = ram[ip + 1] | ram[ip + 2] << 8 | ram[ip + 3] << 16 | ram[ip + 4] << 24;
+                break;
+            }
+
+            case RET: {
+                ip = pop32();
                 break;
             }
 

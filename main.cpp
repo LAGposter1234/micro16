@@ -1,9 +1,10 @@
 #include <iostream>
 #include <cstdint>
+#include <cstdlib>
 #include <raylib.h>
 #include "cpu.hpp"
 
-#define CLOCK_SPEED 1000
+static unsigned long long CLOCK_SPEED = 1000000;
 
 #include <termios.h>
 #include <unistd.h>
@@ -65,8 +66,7 @@ void updateFramebuffer(Cpu &c) {
                 uint8_t ch = cell & 0xFF;
                 uint8_t color = cell >> 8;
 
-                if (ch)
-                    DrawText(TextFormat("%c", ch), x * 10, y * 10, 10, RGBI2222ToRaylib(color));
+                if (ch) DrawText(TextFormat("%c", ch), x * 10, y * 10, 10, RGBI2222ToRaylib(color));
             }
         }
     }
@@ -134,6 +134,7 @@ int main(int argc, char** argv) {
 
         if (arg.rfind("-bios=", 0) == 0) bios = argv[i] + 6;
         else if (arg.rfind("-disk=", 0) == 0) disk = argv[i] + 6;
+        else if (arg.rfind("-speed=", 0) == 0) CLOCK_SPEED = std::atoi(argv[i] + 7);
     }
     if (bios) {
         cpu.loadBinary(std::string(bios));
@@ -155,7 +156,7 @@ int main(int argc, char** argv) {
             for (int i = 0; i < CLOCK_SPEED / fps; i++) {
                 if (!cpu.halted) totalCycles++;
                 cycles++;
-                if (cycles >= CLOCK_SPEED / 1000) {
+                if (cycles >= (float)CLOCK_SPEED / 1000.0f) {
                     cycles = 0;
                     if (cpu.halted && cpu.ports[0xF0]->provideOutput() && cpu.ports[0xFF]->provideOutput()) {
                         if(cpu.ports[0xF1]->provideOutput()) {

@@ -97,6 +97,11 @@ OPCODES = {
     "STRIMMA": 74,
     "STRAB": 75,
 
+    # FUNCY
+
+    "CALL": 76,
+    "RET": 77,
+
     "HLT": 255,
 }
 
@@ -108,6 +113,7 @@ ONE_BYTE_OPERAND = {
     "INC",
     "OUTC",
     "INT",
+    "SETC",
 }
 
 
@@ -149,6 +155,7 @@ FOUR_BYTE_OPERAND = {
     "LDXB",
     "SRXA",
     "SRXB",
+    "CALL",
 }
 
 
@@ -194,12 +201,13 @@ NO_OPERAND = {
     "SRAC",
     "SRBC",
 
-    "JCZ",
-
     "IRET",
 
     # EZMEM
     "STRAB",
+
+    # FUNCY
+    "RET",
 
     "HLT",
 }
